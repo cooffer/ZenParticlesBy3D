@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-// We are using the global script for Hands, so no import here.
+import * as mpHands from '@mediapipe/hands';
+import type { Results } from '@mediapipe/hands';
 import { GestureState } from '../types';
 
 interface WebcamHandlerProps {
@@ -7,19 +8,14 @@ interface WebcamHandlerProps {
   onCameraStatus: (ready: boolean) => void;
 }
 
-// Minimal interface for what we need from MediaPipe results
-interface Results {
-  multiHandLandmarks: Array<Array<{x: number, y: number, z: number}>>;
-  image: any;
-}
-
 const WebcamHandler: React.FC<WebcamHandlerProps> = ({ onGestureUpdate, onCameraStatus }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  // Use any for the Hands instance since we're loading from window
+  // Use any to hold the Hands instance to avoid strict type checks against the mixed import
   const handsRef = useRef<any>(null);
   const requestRef = useRef<number | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
+  const [hasError, setHasError] = useState(false);
   const [lastDetectionTime, setLastDetectionTime] = useState(0);
   
   // Smoothing refs
@@ -31,17 +27,21 @@ const WebcamHandler: React.FC<WebcamHandlerProps> = ({ onGestureUpdate, onCamera
     let isActive = true;
     const canvasElement = canvasRef.current;
     
-    // 1. Initialize MediaPipe Hands from Global Scope
-    // The script in index.html exposes `Hands` on the window object.
-    const Hands = (window as any).Hands;
+    // Resolve the Hands class from the import, handling potential default export wrapping
+    const HandsClass = (mpHands as any).Hands || (mpHands as any).default?.Hands;
 
-    if (!Hands) {
-      console.error("MediaPipe Hands not found on window object. Check index.html script tags.");
-      return;
+    if (!HandsClass) {
+        console.error("MediaPipe Hands library failed to load correctly.");
+        setHasError(true);
+        onCameraStatus(false);
+        return;
     }
 
-    const hands = new Hands({
-      locateFile: (file: string) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+    // Initialize MediaPipe Hands
+    const hands = new HandsClass({
+      locateFile: (file: string) => {
+        return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+      }
     });
 
     hands.setOptions({
@@ -198,14 +198,24 @@ const WebcamHandler: React.FC<WebcamHandlerProps> = ({ onGestureUpdate, onCamera
           };
         }
       } catch (e) {
-        if (isActive) onCameraStatus(false);
+        console.error("Camera failed to start:", e);
+        if (isActive) {
+            setHasError(true);
+            onCameraStatus(false);
+        }
       }
     };
 
     const detectFrame = async () => {
       if (!isActive) return;
       if (videoRef.current && videoRef.current.readyState >= 2 && handsRef.current) {
-        try { await handsRef.current.send({ image: videoRef.current }); } catch (e) {}
+         if (videoRef.current.videoWidth > 0 && videoRef.current.videoHeight > 0) {
+             try { 
+                 await handsRef.current.send({ image: videoRef.current }); 
+             } catch (e) {
+                 // console.error("MediaPipe send error:", e);
+             }
+         }
       }
       if (isActive) requestRef.current = requestAnimationFrame(detectFrame);
     };
@@ -224,13 +234,30 @@ const WebcamHandler: React.FC<WebcamHandlerProps> = ({ onGestureUpdate, onCamera
 
   const isTracking = Date.now() - lastDetectionTime < 1000 && isLoaded;
 
+  // Status Text Logic
+  let statusText = "LOADING...";
+  let statusColor = "text-yellow-400 bg-black/70";
+  
+  if (hasError) {
+      statusText = "CAMERA ERROR";
+      statusColor = "text-red-500 bg-black/90";
+  } else if (isLoaded) {
+      if (isTracking) {
+          statusText = "GESTURE ACTIVE";
+          statusColor = "text-green-400 bg-black/50";
+      } else {
+          statusText = "SEARCHING...";
+          statusColor = "text-yellow-400 bg-black/70";
+      }
+  }
+
   return (
     <div className="fixed bottom-2 left-2 z-50 rounded-lg overflow-hidden border-2 border-purple-500/50 shadow-2xl bg-black w-24 h-auto md:w-[320px]">
       <div className="relative aspect-[4/3]">
         <video ref={videoRef} className="absolute inset-0 w-full h-full object-cover transform scale-x-[-1]" playsInline muted />
         <canvas ref={canvasRef} width={320} height={240} className="absolute inset-0 w-full h-full transform scale-x-[-1]" />
-        <div className={`hidden md:block absolute bottom-2 left-2 text-[10px] font-mono px-2 rounded backdrop-blur-sm pointer-events-none transition-colors ${isTracking ? "text-green-400 bg-black/50" : "text-yellow-400 bg-black/70"}`}>
-          {isLoaded ? (isTracking ? "GESTURE ACTIVE" : "SEARCHING...") : "LOADING..."}
+        <div className={`hidden md:block absolute bottom-2 left-2 text-[10px] font-mono px-2 rounded backdrop-blur-sm pointer-events-none transition-colors ${statusColor}`}>
+          {statusText}
         </div>
       </div>
     </div>
