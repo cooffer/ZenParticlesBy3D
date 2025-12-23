@@ -25,45 +25,43 @@ const vertexShader = `
   uniform float uTime;
   uniform float uSize;
   uniform float uScale;
-  uniform float uExpansion; // Added for Pinch/Spread gesture
+  uniform float uExpansion; 
   uniform float uPixelRatio;
   
   attribute vec3 color;      // Custom color attribute
   attribute float pSize;     // Random per-particle size multiplier
   attribute float pRotation; // Random initial rotation
+  attribute float pSizeOverride; // Override size from geometry
+  attribute float pMixTexture;   // 0.0 = Force Circle, 1.0 = Allow Texture
 
   varying vec3 vColor;
   varying float vRotation;
+  varying float vMixTexture;
 
   void main() {
     vColor = color;
     vRotation = pRotation;
+    vMixTexture = pMixTexture;
 
     // 1. Base Position
     vec3 pos = position;
 
     // 2. Expansion (Explosion effect from center)
-    // Push particles outward along their normal vector
     vec3 dir = normalize(pos);
-    // If position is (0,0,0), avoid NaN
     if (length(pos) < 0.001) dir = vec3(0.0, 1.0, 0.0);
-    
-    // Increased multiplier from 5.0 to 8.0 for stronger gesture feedback
     pos += dir * uExpansion * 8.0; 
 
-    // 3. Scale (UI Scale Slider)
+    // 3. Scale 
     pos *= uScale;
 
     vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
     gl_Position = projectionMatrix * mvPosition;
 
     // Size attenuation
-    // uSize: Base Global Size (Reduced to 4.0 for basic particle look)
-    // pSize: Per-particle random variation (0.5 to 2.5)
-    // 20.0: Perspective multiplier constant
-    // -mvPosition.z: Distance to camera
-    float size = uSize * pSize * uPixelRatio * (20.0 / -mvPosition.z);
-    gl_PointSize = max(size, 2.0); // Allow smaller particles for depth
+    float finalSize = (pSizeOverride > 0.0) ? pSizeOverride : pSize;
+    
+    float size = uSize * finalSize * uPixelRatio * (20.0 / -mvPosition.z);
+    gl_PointSize = max(size, 2.0); 
   }
 `;
 
@@ -75,51 +73,44 @@ const fragmentShader = `
 
   varying vec3 vColor;
   varying float vRotation;
+  varying float vMixTexture;
 
-  // Constants
   #define PI 3.14159265359
 
-  // Rotate UV coordinates
   vec2 rotate(vec2 uv, float angle) {
       float s = sin(angle);
       float c = cos(angle);
       return mat2(c, -s, s, c) * uv;
   }
 
-  // --- Signed Distance Functions (SDF) ---
-  
-  // Circle
+  // Circle SDF
   float sdCircle(vec2 p, float r) {
       return length(p) - r;
   }
 
   void main() {
-    // If using custom texture (user uploaded), skip procedural shapes
-    if (uUseTexture == 1) {
-        vec4 texColor = texture2D(uTexture, gl_PointCoord);
+    // Logic: Use texture ONLY if uUseTexture is active AND the specific particle allows it (vMixTexture > 0.5)
+    // For Tree: Leaves have vMixTexture=0, Ornaments have vMixTexture=1
+    // For Other shapes: Default vMixTexture=1
+    if (uUseTexture == 1 && vMixTexture > 0.5) {
+        vec2 rotatedUV = rotate(gl_PointCoord - 0.5, vRotation) + 0.5;
+        vec4 texColor = texture2D(uTexture, rotatedUV);
+        
         if (texColor.a < 0.1) discard;
+        
+        // Multiply by vColor to tint the texture
+        // This preserves the "Gold/Red" assignment from geometry.ts while showing the photo
         gl_FragColor = vec4(vColor * texColor.rgb, uOpacity * texColor.a);
         return;
     }
 
-    // Normalized coordinates (-0.5 to 0.5)
     vec2 uv = gl_PointCoord - 0.5;
 
-    // Apply Rotation (Initial random + slow spin over time)
-    // Spin speed varies slightly based on rotation seed
     float spinSpeed = 0.5 + 0.5 * sin(vRotation * 10.0); 
-    
     vec2 rotatedUV = rotate(uv, vRotation + uTime * spinSpeed);
 
-    // Basic Circle Shape (Basic Particle)
     float dist = sdCircle(rotatedUV, 0.4);
-    
-    // Smoothing factor for edges
     float smoothing = 0.05; 
-
-    // Rendering
-    // SDFs return < 0 inside the shape, > 0 outside.
-    // We want 1.0 inside, 0.0 outside.
     float alpha = 1.0 - smoothstep(0.0, smoothing, dist);
 
     if (alpha < 0.01) discard;
@@ -146,25 +137,19 @@ const Particles: React.FC<ParticlesProps> = ({
   const meshRef = useRef<THREE.Points>(null);
   
   // 1. Generate Static Random Attributes (Size, Rotation)
-  // These do not change when shape morphs, giving particles persistent "identity"
-  // Initialize to MAX_PARTICLE_COUNT
   const { randomSizes, rotations } = useMemo(() => {
     const randomSizes = new Float32Array(MAX_PARTICLE_COUNT);
     const rotations = new Float32Array(MAX_PARTICLE_COUNT);
 
     for (let i = 0; i < MAX_PARTICLE_COUNT; i++) {
-      // Random Size: 0.5x to 2.5x
       randomSizes[i] = 0.5 + Math.random() * 2.0;
-      
-      // Random Rotation: 0 to 2PI
       rotations[i] = Math.random() * Math.PI * 2;
     }
     return { randomSizes, rotations };
   }, []);
 
-  // 2. Generate Positions & Colors based on Shape/Mode
-  // Also returns 'currentCount' which tells us how many particles are actually valid
-  const { positions, colors: imageColors, currentCount } = useMemo(() => {
+  // 2. Generate Positions, Colors, Specific Sizes & TextureMix
+  const { positions, colors: imageColors, currentCount, sizes: overrideSizes, textureMix } = useMemo(() => {
     return generateShapePositions(shape, imageData);
   }, [shape, imageData]);
 
@@ -173,26 +158,20 @@ const Particles: React.FC<ParticlesProps> = ({
     if (!meshRef.current) return;
     const geometry = meshRef.current.geometry;
     
-    // Dynamically set how many particles to draw
     geometry.setDrawRange(0, currentCount);
-
-    // Position
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     
-    // Color Handling
-    // LOGIC FIX:
-    // We prioritize imageColors (from geometry) ONLY if:
-    // 1. It is a Flag (which returns specific procedural colors in the color buffer)
-    // 2. The mode is explicitly set to IMAGE (e.g. user uploaded photo)
-    // For TEXT shape, we usually want to use the Base/Secondary colors (Gradient/Mono), not the white pixels from the canvas.
-    const useGeometryColors = imageColors && (shape === ShapeType.FLAG || colorMode === ColorMode.IMAGE);
+    // Color Priority Logic
+    const useGeometryColors = imageColors && (
+        shape === ShapeType.FLAG || 
+        shape === ShapeType.TREE || 
+        colorMode === ColorMode.IMAGE
+    );
 
     if (useGeometryColors) {
       geometry.setAttribute('color', new THREE.BufferAttribute(imageColors, 3));
     } else {
-       // Since the geometry buffer might be larger than currentCount, we fill what we need
-       // We regenerate the color buffer for the active set.
-       
+       // Gradient / Mono Generation
        const generatedColors = new Float32Array(MAX_PARTICLE_COUNT * 3);
        const c1 = new THREE.Color(baseColor);
        const c2 = new THREE.Color(secondaryColor);
@@ -206,7 +185,6 @@ const Particles: React.FC<ParticlesProps> = ({
                const c = new THREE.Color().setHSL(Math.random(), 1.0, 0.5);
                r = c.r; g = c.g; b = c.b;
            } else {
-               // Gradient
                const ratio = i / currentCount;
                const c = c1.clone().lerp(c2, ratio);
                r = c.r; g = c.g; b = c.b;
@@ -218,50 +196,50 @@ const Particles: React.FC<ParticlesProps> = ({
        geometry.setAttribute('color', new THREE.BufferAttribute(generatedColors, 3));
     }
 
-    // Custom Attributes for Random Shapes
-    // We already have these pre-calculated for MAX_COUNT, just attach them.
+    // Custom Attributes
     geometry.setAttribute('pSize', new THREE.BufferAttribute(randomSizes, 1));
     geometry.setAttribute('pRotation', new THREE.BufferAttribute(rotations, 1));
+    
+    const sizeBuffer = overrideSizes || new Float32Array(MAX_PARTICLE_COUNT);
+    geometry.setAttribute('pSizeOverride', new THREE.BufferAttribute(sizeBuffer, 1));
+
+    // Texture Mix Attribute (New)
+    // If textureMix is provided by geometry (Tree), use it. Else default to 1.0s.
+    const mixBuffer = textureMix || new Float32Array(MAX_PARTICLE_COUNT).fill(1.0);
+    geometry.setAttribute('pMixTexture', new THREE.BufferAttribute(mixBuffer, 1));
 
     geometry.attributes.position.needsUpdate = true;
     if (geometry.attributes.color) geometry.attributes.color.needsUpdate = true;
     geometry.attributes.pSize.needsUpdate = true;
     geometry.attributes.pRotation.needsUpdate = true;
+    geometry.attributes.pSizeOverride.needsUpdate = true;
+    geometry.attributes.pMixTexture.needsUpdate = true;
 
-  }, [positions, imageColors, currentCount, randomSizes, rotations, colorMode, baseColor, secondaryColor, shape]);
+  }, [positions, imageColors, currentCount, randomSizes, rotations, overrideSizes, textureMix, colorMode, baseColor, secondaryColor, shape]);
 
-  // 4. Render Loop
   useFrame((state) => {
     if (!meshRef.current) return;
     
     const { clock } = state;
     const material = meshRef.current.material as THREE.ShaderMaterial;
     
-    // Update Time & Uniforms
     material.uniforms.uTime.value = clock.getElapsedTime();
     material.uniforms.uScale.value = scale; 
     material.uniforms.uOpacity.value = opacity;
     material.uniforms.uPixelRatio.value = Math.min(window.devicePixelRatio, 2);
 
-    // Gestures
     const gesture = gestureRef.current;
     
-    // Expansion (Lerp for smoothness)
     material.uniforms.uExpansion.value = THREE.MathUtils.lerp(
         material.uniforms.uExpansion.value,
         gesture.expansion,
         0.1
     );
 
-    // Zoom (Push/Pull): Map to Mesh Scale
-    // WebcamHandler Zoom range: 0.2 to 5.0
     const targetScale = gesture.zoom;
     meshRef.current.scale.lerp(new THREE.Vector3(targetScale, targetScale, targetScale), 0.1);
-
-    // Rotation (Tilt)
     meshRef.current.rotation.z = THREE.MathUtils.lerp(meshRef.current.rotation.z, gesture.rotation, 0.1);
 
-    // Handle Custom Texture Toggle
     if (customParticleTexture) {
         material.uniforms.uUseTexture.value = 1;
         material.uniforms.uTexture.value = customParticleTexture;
@@ -281,7 +259,7 @@ const Particles: React.FC<ParticlesProps> = ({
         blending={THREE.AdditiveBlending}
         uniforms={{
             uTime: { value: 0 },
-            uSize: { value: 4.0 }, // Basic small particles
+            uSize: { value: 4.0 }, 
             uScale: { value: 1.0 },
             uExpansion: { value: 0.0 },
             uOpacity: { value: 1.0 },

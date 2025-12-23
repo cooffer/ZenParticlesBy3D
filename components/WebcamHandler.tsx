@@ -18,7 +18,7 @@ const WebcamHandler: React.FC<WebcamHandlerProps> = ({ onGestureUpdate, onCamera
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // Use any for the Hands instance since we're loading from window
   const handsRef = useRef<any>(null);
-  const requestRef = useRef<number>();
+  const requestRef = useRef<number | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
   const [lastDetectionTime, setLastDetectionTime] = useState(0);
   

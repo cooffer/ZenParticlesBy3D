@@ -31,9 +31,6 @@ import {
   Target       // Fu (Abstract for now, or just use Type)
 } from 'lucide-react';
 
-// NOTE: Lucide-react might not export 'Rabbit' or 'Triangle' in older versions. 
-// If they fail, we fallback to generic icons in the UI code below.
-
 import Particles from './components/Particles';
 import WebcamHandler from './components/WebcamHandler';
 import { ShapeType, ColorMode, GestureState } from './types';
@@ -99,9 +96,6 @@ const App: React.FC = () => {
   const applyTheme = (newShape: ShapeType, color1: string, color2: string, mode: ColorMode = ColorMode.GRADIENT, msg?: string, textOverride?: string) => {
       if (textOverride) {
           setCustomText(textOverride);
-          // Wait a tick for state to update before setting shape if possible, but React batching handles it.
-          // However, useEffect for text generation needs customText to change.
-          // We set text first.
       }
       setShape(newShape);
       setBaseColor(color1);
@@ -144,8 +138,6 @@ const App: React.FC = () => {
     // 5. Spring Festival / CNY (Rough check: Jan 20 - Feb 20)
     else if ((month === 1 && day >= 20) || (month === 2 && day <= 10)) {
          if (!detectedHoliday) {
-            // Default to "Fu" character with China Red
-            // #DE2910 is official China Red. Secondary is slightly brighter for 3D depth.
             applyTheme(ShapeType.TEXT, '#DE2910', '#FF4D00', ColorMode.GRADIENT, 'Happy Chinese New Year! 🧧', '福');
             detectedHoliday = true;
          }
@@ -162,7 +154,7 @@ const App: React.FC = () => {
     }
     // 8. Mid-Autumn (Rough check: Sept/Oct) - RABBIT
     else if ((month === 9 && day >= 15) || (month === 10 && day <= 5)) {
-         if (!detectedHoliday) { // Check conflict with National Day
+         if (!detectedHoliday) { 
              applyTheme(ShapeType.RABBIT, '#000033', '#ffffe0', ColorMode.GRADIENT, 'Mid-Autumn Festival! 🐇');
              detectedHoliday = true;
          }
@@ -210,7 +202,6 @@ const App: React.FC = () => {
             const data = ctx.getImageData(0, 0, w, h);
             setPhotoData(data);
             setShape(ShapeType.IMAGE);
-            // Auto switch to Image Color Mode
             setColorMode(ColorMode.IMAGE);
           }
         }
@@ -239,7 +230,7 @@ const App: React.FC = () => {
         const ctx = canvas.getContext('2d');
         if (ctx) {
             const fontSize = 150; 
-            ctx.font = `bold ${fontSize}px "Microsoft YaHei", Arial, sans-serif`; // Added YaHei for Chinese support
+            ctx.font = `bold ${fontSize}px "Microsoft YaHei", Arial, sans-serif`;
             const textMetrics = ctx.measureText(customText);
             const w = Math.ceil(textMetrics.width) || 100;
             const h = fontSize * 1.5;
@@ -264,10 +255,10 @@ const App: React.FC = () => {
 
   return (
     <div className="relative w-full h-screen bg-slate-900 overflow-hidden">
-        {/* Hidden Canvas for processing images/text */}
+        {/* Hidden Canvas */}
         <canvas ref={hiddenCanvasRef} style={{ display: 'none' }} />
 
-        {/* Holiday Toast Notification */}
+        {/* Holiday Toast */}
         {holidayMessage && (
             <div className="absolute top-8 left-1/2 transform -translate-x-1/2 z-50 bg-gradient-to-r from-pink-500 to-purple-600 text-white px-6 py-3 rounded-full shadow-lg shadow-purple-500/30 animate-bounce flex items-center gap-2 font-semibold whitespace-nowrap">
                 <Gift size={20} />
@@ -296,12 +287,25 @@ const App: React.FC = () => {
             <ScreenshotHelper trigger={takeScreenshot} onComplete={() => setTakeScreenshot(false)} />
         </Canvas>
 
-        {/* Webcam Handling */}
+        {/* Webcam */}
         <WebcamHandler onGestureUpdate={handleGestureUpdate} onCameraStatus={handleCameraStatus} />
 
         {/* UI Controls */}
         <div className={`absolute top-0 right-0 h-full w-80 bg-slate-900/90 backdrop-blur-md border-l border-white/10 p-6 transition-transform duration-300 overflow-y-auto z-40 ${showUI ? 'translate-x-0' : 'translate-x-full'}`}>
             <h1 className="text-2xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-pink-500 to-violet-500 mb-6">ZenParticles</h1>
+
+            {/* Particle Texture Upload (Prominent) */}
+            <div className="mb-6 p-3 bg-white/5 rounded-lg border border-white/10">
+                <label className="text-xs font-semibold text-pink-400 uppercase tracking-wider mb-2 block flex items-center gap-2">
+                     <Aperture size={14} /> Upload Particle Photo
+                </label>
+                <p className="text-[10px] text-slate-400 mb-2">Upload a photo to use as the individual particle shape (e.g., a flower, face, or ornament).</p>
+                <button onClick={() => textureInputRef.current?.click()} className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-white rounded text-xs transition-colors flex items-center justify-center gap-2">
+                    {particleTexture ? "Change Photo" : "Select Photo"}
+                </button>
+                <input type="file" ref={textureInputRef} className="hidden" accept="image/*" onChange={handleTextureUpload} />
+                {particleTexture && <button onClick={() => setParticleTexture(null)} className="mt-2 w-full py-1 text-[10px] text-slate-500 hover:text-red-400">Remove Photo</button>}
+            </div>
 
             {/* Shape Selection */}
             <div className="mb-6">
@@ -339,7 +343,7 @@ const App: React.FC = () => {
 
                 <div className="grid grid-cols-2 gap-2">
                     <button onClick={() => setShape(ShapeType.TEXT)} className={`p-2 rounded hover:bg-white/10 flex justify-center ${shape === ShapeType.TEXT ? 'bg-white/20 text-white' : 'text-slate-400'}`} title="Text"><Type size={20} /></button>
-                    <button onClick={() => fileInputRef.current?.click()} className={`p-2 rounded hover:bg-white/10 flex justify-center ${shape === ShapeType.IMAGE ? 'bg-white/20 text-cyan-400' : 'text-slate-400'}`} title="Upload Image"><ImageIcon size={20} /></button>
+                    <button onClick={() => fileInputRef.current?.click()} className={`p-2 rounded hover:bg-white/10 flex justify-center ${shape === ShapeType.IMAGE ? 'bg-white/20 text-cyan-400' : 'text-slate-400'}`} title="Upload Shape Image"><ImageIcon size={20} /></button>
                 </div>
                 <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleImageUpload} />
             </div>
@@ -389,12 +393,6 @@ const App: React.FC = () => {
                 <div className="mb-4">
                     <div className="flex justify-between text-xs text-slate-400 mb-1"><span>Opacity</span><span>{opacity.toFixed(1)}</span></div>
                     <input type="range" min="0.1" max="1" step="0.1" value={opacity} onChange={(e) => setOpacity(parseFloat(e.target.value))} className="w-full accent-pink-500" />
-                </div>
-                 <div className="mb-2">
-                    <button onClick={() => textureInputRef.current?.click()} className="w-full py-2 flex items-center justify-center gap-2 rounded border border-slate-600 text-slate-400 hover:bg-white/5 hover:text-white transition-colors text-xs">
-                        <Aperture size={14} /> Custom Particle Texture
-                    </button>
-                    <input type="file" ref={textureInputRef} className="hidden" accept="image/*" onChange={handleTextureUpload} />
                 </div>
             </div>
             

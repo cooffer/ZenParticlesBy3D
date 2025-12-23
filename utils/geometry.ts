@@ -55,12 +55,24 @@ const shuffleArray = (array: any[]) => {
   }
 };
 
-export const generateShapePositions = (type: ShapeType, imageData?: ImageData | null): { positions: Float32Array, colors?: Float32Array, currentCount: number } => {
+export const generateShapePositions = (type: ShapeType, imageData?: ImageData | null): { 
+  positions: Float32Array, 
+  colors?: Float32Array, 
+  currentCount: number, 
+  sizes?: Float32Array,
+  textureMix?: Float32Array 
+} => {
   const positions = new Float32Array(MAX_PARTICLE_COUNT * 3);
   let colors: Float32Array | undefined;
+  let sizes: Float32Array | undefined; // Support per-shape custom sizing overrides
+  let textureMix: Float32Array | undefined; // 0 = Force Circle, 1 = Allow Texture
   
   // Default to PROCEDURAL_COUNT for standard shapes, but can be overridden by Image/Text logic
   let activeCount = PROCEDURAL_COUNT;
+
+  // Initialize textureMix with 1.0 (Default: All particles show texture if one is uploaded)
+  // We will override this for specific shapes like Tree.
+  textureMix = new Float32Array(MAX_PARTICLE_COUNT).fill(1.0);
 
   // --- IMAGE / TEXT PROCESSING (Grid Sampling) ---
   if ((type === ShapeType.IMAGE || type === ShapeType.TEXT) && imageData && imageData.width > 0) {
@@ -123,14 +135,19 @@ export const generateShapePositions = (type: ShapeType, imageData?: ImageData | 
           colors[i3+2] = p.b;
       }
       
-      return { positions, colors, currentCount: activeCount };
+      return { positions, colors, currentCount: activeCount, textureMix };
   }
 
   // --- PROCEDURAL SHAPES ---
   
-  // Initialize colors buffer only for FLAG (to support the 5-stars logic procedural coloring)
-  if (type === ShapeType.FLAG) {
+  // Initialize colors buffer only for specific shapes that need internal coloring
+  if (type === ShapeType.FLAG || type === ShapeType.TREE) {
       colors = new Float32Array(MAX_PARTICLE_COUNT * 3);
+  }
+
+  // Initialize custom size buffer for Tree (to make ornaments larger)
+  if (type === ShapeType.TREE) {
+      sizes = new Float32Array(MAX_PARTICLE_COUNT);
   }
 
   for (let i = 0; i < activeCount; i++) {
@@ -157,24 +174,15 @@ export const generateShapePositions = (type: ShapeType, imageData?: ImageData | 
         break;
       }
       case ShapeType.ROSE: {
-        // Parametric Rose-ish shape
-        // Based on spherical coords modulation
         const theta = Math.random() * Math.PI * 2;
         const phi = Math.acos(2 * Math.random() - 1);
         const rBase = 4;
-        
-        // Modulate radius to create petals
-        // k=4 gives 8 petalsish look
         const k = 3; 
         const petal = 1 + 0.3 * Math.sin(k * theta) * Math.sin(phi * 4);
-        
         const r = Math.cbrt(Math.random()) * rBase * petal;
-        
         x = r * Math.sin(phi) * Math.cos(theta);
         z = r * Math.sin(phi) * Math.sin(theta);
         y = r * Math.cos(phi) * 0.8; 
-        
-        // Flatten bottom slightly
         if (y < -1) y *= 0.5;
         break;
       }
@@ -227,7 +235,7 @@ export const generateShapePositions = (type: ShapeType, imageData?: ImageData | 
         break;
       }
       case ShapeType.DNA: {
-        const t = (i / activeCount) * Math.PI * 30; // More twists for higher count
+        const t = (i / activeCount) * Math.PI * 30; 
         const height = 12;
         const yPos = ((i / activeCount) - 0.5) * height;
         const radius = 2.5;
@@ -263,20 +271,85 @@ export const generateShapePositions = (type: ShapeType, imageData?: ImageData | 
         break;
       }
       case ShapeType.TREE: {
-        const t = i / activeCount; 
-        const turns = 16 * t; 
-        const angle = turns * Math.PI * 2;
-        const height = 13;
-        const bottomRadius = 5.5;
-        y = (0.5 - t) * height; 
-        const currentRadius = t * bottomRadius; 
-        const rRandom = Math.random();
-        const rOffset = currentRadius * (0.8 + 0.2 * rRandom);
-        x = Math.cos(angle) * rOffset;
-        z = Math.sin(angle) * rOffset;
-        x += (Math.random()-0.5) * 0.5;
-        z += (Math.random()-0.5) * 0.5;
-        y += (Math.random()-0.5) * 0.5;
+        // Advanced Christmas Tree Logic
+        const totalHeight = 15;
+        const yBase = -7;
+        const levels = 6; // Number of cone layers
+        
+        const r = Math.random();
+        
+        // 98% Body/Ornaments, 2% Top Star
+        if (i < activeCount - 100) {
+            // Layer Logic: Select a level
+            const level = Math.floor(Math.random() * levels);
+            const levelHeight = totalHeight / levels;
+            // Height within level
+            const h = Math.random() * levelHeight; 
+            
+            // Y position
+            y = yBase + level * (levelHeight * 0.8) + h; 
+            
+            // Radius at this height (Cone shape)
+            const levelRadius = 5.0 * (1 - (level / levels)); // Bottom is wide, top is narrow
+            const radiusAtY = levelRadius * (1 - h / levelHeight);
+            
+            const theta = Math.random() * Math.PI * 2;
+            // Volume distribution (concentrate on surface for better definition)
+            const radius = radiusAtY * Math.pow(Math.random(), 0.3); 
+            
+            x = radius * Math.cos(theta);
+            z = radius * Math.sin(theta);
+            
+            // Color Logic
+            if (colors && sizes && textureMix) {
+                const isSurface = radius > radiusAtY * 0.85;
+                const ornamentProb = 0.08; // 8% chance if on surface
+                
+                if (isSurface && Math.random() < ornamentProb) {
+                    // ORNAMENTS (Red/Gold balls, or "Objects")
+                    const type = Math.random();
+                    if (type < 0.4) { 
+                        // Gold
+                        colors[i3] = 1.0; colors[i3+1] = 0.84; colors[i3+2] = 0.0;
+                    } else if (type < 0.8) {
+                        // Red
+                        colors[i3] = 0.9; colors[i3+1] = 0.1; colors[i3+2] = 0.1;
+                    } else {
+                        // Silver/White Lights
+                        colors[i3] = 0.95; colors[i3+1] = 0.95; colors[i3+2] = 1.0;
+                    }
+                    // Make ornaments significantly larger (simulating "objects")
+                    sizes[i] = 4.0 + Math.random() * 2.0; 
+                    
+                    // Enable texture for Ornaments
+                    textureMix[i] = 1.0;
+                } else {
+                    // FOLIAGE (Green)
+                    // Darker green inside, lighter green outside
+                    const greenMix = 0.3 + 0.7 * (radius / radiusAtY);
+                    colors[i3] = 0.1 * greenMix; 
+                    colors[i3+1] = 0.4 + 0.4 * greenMix; 
+                    colors[i3+2] = 0.1 * greenMix;
+                    
+                    sizes[i] = 1.0; // Normal leaf size
+                    
+                    // Disable texture for Leaves (keep them as colored dots)
+                    textureMix[i] = 0.0;
+                }
+            }
+        } else {
+            // STAR at the top
+            const p = randomInSphere(0.6);
+            x = p.x;
+            y = yBase + totalHeight + p.y; // Top
+            z = p.z;
+            
+            if (colors && sizes && textureMix) {
+                colors[i3] = 1.0; colors[i3+1] = 1.0; colors[i3+2] = 0.2; // Yellow
+                sizes[i] = 3.0; // Bright star glow
+                textureMix[i] = 1.0; // Star can be textured
+            }
+        }
         break;
       }
       case ShapeType.SNOWFLAKE: {
@@ -395,33 +468,21 @@ export const generateShapePositions = (type: ShapeType, imageData?: ImageData | 
         break;
       }
       case ShapeType.SNAKE: {
-          // Coiled Snake
-          const t = i / activeCount; // 0 to 1
+          const t = i / activeCount;
           const coils = 4;
           const height = 10;
-          
-          // Spiral parameters
           const angle = t * Math.PI * 2 * coils;
           const yPos = (t - 0.5) * height;
-          
-          // Tapered radius (thicker body, thinner tail/head)
           const baseRadius = 3.5;
-          const bodyThickness = 0.8 * Math.sin(t * Math.PI); // Thicker in middle
-          
-          // Main spine
-          const spineX = Math.cos(angle) * (baseRadius - t * 1.5); // Taper spiral inwards slightly at top
+          const bodyThickness = 0.8 * Math.sin(t * Math.PI);
+          const spineX = Math.cos(angle) * (baseRadius - t * 1.5);
           const spineZ = Math.sin(angle) * (baseRadius - t * 1.5);
-          
-          // Volume around spine
           const volR = Math.random() * bodyThickness + 0.1;
           const volTheta = Math.random() * Math.PI * 2;
           const volPhi = Math.random() * Math.PI;
-          
           x = spineX + volR * Math.sin(volPhi) * Math.cos(volTheta);
           z = spineZ + volR * Math.sin(volPhi) * Math.sin(volTheta);
           y = yPos + volR * Math.cos(volPhi);
-          
-          // Head area details (top of spiral)
           if (t > 0.98) {
              x += (Math.random()-0.5) * 0.5; 
              z += (Math.random()-0.5) * 0.5;
@@ -429,66 +490,40 @@ export const generateShapePositions = (type: ShapeType, imageData?: ImageData | 
           break;
       }
       case ShapeType.BRIDGE: {
-          // Qixi Magpie Bridge
-          // Arc: y = -x^2
-          const t = (Math.random() - 0.5) * 2; // -1 to 1
+          const t = (Math.random() - 0.5) * 2;
           const width = 12;
           x = t * width;
-          // Arch equation
           y = Math.cos(t * 1.4) * 4 - 2; 
-          z = (Math.random() - 0.5) * 3; // Bridge width
-          
-          // Add thickness to bridge
+          z = (Math.random() - 0.5) * 3;
           y += (Math.random() - 0.5) * 0.5;
-          
-          // Lovers (Two clusters at the peak x~0)
           if (Math.random() > 0.95) {
              const side = Math.random() > 0.5 ? 1.5 : -1.5;
              x = side + (Math.random() - 0.5);
-             y = 2 + Math.random() * 2; // Standing on top
+             y = 2 + Math.random() * 2;
              z = (Math.random() - 0.5);
           }
           break;
       }
       case ShapeType.FLAG: {
-          // National Flag
-          // Plane with wave: z = sin(x)
           const w = 16;
           const h = 10;
-          
-          const u = Math.random(); // 0-1 X
-          const v = Math.random(); // 0-1 Y
-          
+          const u = Math.random();
+          const v = Math.random();
           x = (u - 0.5) * w;
           y = (v - 0.5) * h;
-          
-          // Wave
           z = Math.sin(x * 0.5) * 1.5 + (Math.random() - 0.5) * 0.1;
-          
-          // Color Logic (Five Star Flag)
-          // Top Left Corner (x < -0.3*w/2, y > 0) roughly
-          // We need to set the color buffer here manually since we aren't using the standard gradient
-          // Red: 1, 0, 0
-          // Yellow: 1, 1, 0
           
           if (colors) {
               const inStarArea = (u < 0.4 && v > 0.5);
               if (inStarArea) {
-                  // Simple approximation: Random scattered stars in the top left
-                  // To make stars visible, we make points yellow if they fall into specific circle areas
-                  // Large star center: u=0.15, v=0.75
-                  // Small stars around
-                  
-                  // Coordinate relative to top-left
-                  // Let's just make the top-left quadrant have yellow stars scattered
                   const isStar = Math.random() > 0.85; 
                   if (isStar) {
-                    colors[i3] = 1.0; colors[i3+1] = 1.0; colors[i3+2] = 0.0; // Yellow
+                    colors[i3] = 1.0; colors[i3+1] = 1.0; colors[i3+2] = 0.0;
                   } else {
-                    colors[i3] = 0.9; colors[i3+1] = 0.0; colors[i3+2] = 0.0; // Red
+                    colors[i3] = 0.9; colors[i3+1] = 0.0; colors[i3+2] = 0.0;
                   }
               } else {
-                  colors[i3] = 0.9; colors[i3+1] = 0.0; colors[i3+2] = 0.0; // Red
+                  colors[i3] = 0.9; colors[i3+1] = 0.0; colors[i3+2] = 0.0;
               }
           }
           break;
@@ -500,5 +535,5 @@ export const generateShapePositions = (type: ShapeType, imageData?: ImageData | 
     positions[i3+2] = z;
   }
 
-  return { positions, colors, currentCount: activeCount };
+  return { positions, colors, currentCount: activeCount, sizes, textureMix };
 };
