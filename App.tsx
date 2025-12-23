@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, Suspense, useCallback, useEffect, useMemo } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
@@ -28,7 +27,8 @@ import {
   Rabbit,      // Rabbit
   Flag,        // National Day
   Users,       // Qixi (Lovers)
-  Target       // Fu (Abstract for now, or just use Type)
+  Target,      // Fu (Abstract for now, or just use Type)
+  Trash2       // Clear Icon
 } from 'lucide-react';
 
 import Particles from './components/Particles';
@@ -60,13 +60,14 @@ const App: React.FC = () => {
   const [secondaryColor, setSecondaryColor] = useState<string>('#4400ff');
   const [scale, setScale] = useState<number>(1.0);
   const [opacity, setOpacity] = useState<number>(0.6); // Default slightly transparent
+  const [particleSize, setParticleSize] = useState<number>(1.0); // New Particle Size Multiplier
   const [customText, setCustomText] = useState<string>('ZEN');
   const [showUI, setShowUI] = useState<boolean>(true);
   const [takeScreenshot, setTakeScreenshot] = useState<boolean>(false);
   const [holidayMessage, setHolidayMessage] = useState<string | null>(null);
   
-  // Custom Particle Texture (Photo as Particle)
-  const [particleTexture, setParticleTexture] = useState<THREE.Texture | null>(null);
+  // Custom Particle Textures (Array of Photos)
+  const [particleTextures, setParticleTextures] = useState<THREE.Texture[]>([]);
 
   const gestureStateRef = useRef<GestureState>({
     expansion: 0,
@@ -215,9 +216,23 @@ const App: React.FC = () => {
   const handleTextureUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       if (!file) return;
+      
+      if (particleTextures.length >= 5) {
+          alert("Max 5 photo particles allowed.");
+          return;
+      }
+
       const loader = new THREE.TextureLoader();
       loader.load(URL.createObjectURL(file), (tex) => {
-          setParticleTexture(tex);
+          // IMPORTANT: Enable linear filtering for non-power-of-two images
+          tex.minFilter = THREE.LinearFilter;
+          tex.magFilter = THREE.LinearFilter;
+          tex.needsUpdate = true;
+          
+          setParticleTextures(prev => [...prev, tex]);
+          
+          // Reset file input so same file can be selected again if needed (though unlikely)
+          if (textureInputRef.current) textureInputRef.current.value = '';
       });
   };
 
@@ -278,9 +293,10 @@ const App: React.FC = () => {
                     secondaryColor={secondaryColor}
                     scale={scale}
                     opacity={opacity}
+                    particleSize={particleSize}
                     gestureRef={gestureStateRef}
                     imageData={activeImageData}
-                    customParticleTexture={particleTexture}
+                    customParticleTextures={particleTextures}
                 />
             </Suspense>
             <OrbitControls enableDamping dampingFactor={0.05} />
@@ -296,15 +312,41 @@ const App: React.FC = () => {
 
             {/* Particle Texture Upload (Prominent) */}
             <div className="mb-6 p-3 bg-white/5 rounded-lg border border-white/10">
-                <label className="text-xs font-semibold text-pink-400 uppercase tracking-wider mb-2 block flex items-center gap-2">
-                     <Aperture size={14} /> Upload Particle Photo
-                </label>
-                <p className="text-[10px] text-slate-400 mb-2">Upload a photo to use as the individual particle shape (e.g., a flower, face, or ornament).</p>
-                <button onClick={() => textureInputRef.current?.click()} className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-white rounded text-xs transition-colors flex items-center justify-center gap-2">
-                    {particleTexture ? "Change Photo" : "Select Photo"}
+                <div className="flex justify-between items-center mb-2">
+                    <label className="text-xs font-semibold text-pink-400 uppercase tracking-wider flex items-center gap-2">
+                        <Aperture size={14} /> Add 3D Photos ({particleTextures.length}/5)
+                    </label>
+                    {particleTextures.length > 0 && (
+                        <button onClick={() => setParticleTextures([])} className="text-xs text-red-400 hover:text-red-300 flex items-center gap-1">
+                            <Trash2 size={12} /> Clear
+                        </button>
+                    )}
+                </div>
+                <p className="text-[10px] text-slate-400 mb-2">Add up to 5 photos. They will float and spin in 3D among the particles.</p>
+                
+                <button 
+                    onClick={() => textureInputRef.current?.click()} 
+                    disabled={particleTextures.length >= 5}
+                    className={`w-full py-2 rounded text-xs transition-colors flex items-center justify-center gap-2 ${particleTextures.length >= 5 ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : 'bg-slate-800 hover:bg-slate-700 text-white'}`}
+                >
+                    {particleTextures.length >= 5 ? "Limit Reached" : "Add Photo"}
                 </button>
                 <input type="file" ref={textureInputRef} className="hidden" accept="image/*" onChange={handleTextureUpload} />
-                {particleTexture && <button onClick={() => setParticleTexture(null)} className="mt-2 w-full py-1 text-[10px] text-slate-500 hover:text-red-400">Remove Photo</button>}
+                
+                {/* Thumbnails */}
+                {particleTextures.length > 0 && (
+                    <div className="flex gap-2 mt-2 overflow-x-auto pb-2">
+                        {particleTextures.map((tex, i) => (
+                            <div key={i} className="w-10 h-10 shrink-0 rounded border border-white/20 overflow-hidden bg-black/50">
+                                {/* We can't easily access the image URL from texture object in React standard flow without keeping separate state, 
+                                    but we can just show a placeholder or try to render. For simplicity, just showing a numbered box. 
+                                    Actually, we can use the source image if it's available, but texture.image is an ImageBitmap or Image.
+                                    Let's just show a simple indicator. */}
+                                <div className="w-full h-full flex items-center justify-center text-[10px] text-white/50">{i+1}</div>
+                            </div>
+                        ))}
+                    </div>
+                )}
             </div>
 
             {/* Shape Selection */}
@@ -387,7 +429,11 @@ const App: React.FC = () => {
              <div className="mb-6">
                 <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Appearance</h3>
                 <div className="mb-4">
-                    <div className="flex justify-between text-xs text-slate-400 mb-1"><span>Scale</span><span>{scale.toFixed(1)}</span></div>
+                    <div className="flex justify-between text-xs text-slate-400 mb-1"><span>Particle Size</span><span>{particleSize.toFixed(1)}x</span></div>
+                    <input type="range" min="0.1" max="5.0" step="0.1" value={particleSize} onChange={(e) => setParticleSize(parseFloat(e.target.value))} className="w-full accent-pink-500" />
+                </div>
+                <div className="mb-4">
+                    <div className="flex justify-between text-xs text-slate-400 mb-1"><span>Scale (Zoom)</span><span>{scale.toFixed(1)}</span></div>
                     <input type="range" min="0.1" max="3" step="0.1" value={scale} onChange={(e) => setScale(parseFloat(e.target.value))} className="w-full accent-pink-500" />
                 </div>
                 <div className="mb-4">

@@ -114,9 +114,12 @@ export const generateShapePositions = (type: ShapeType, imageData?: ImageData | 
           }
       }
 
-      if (validPixels.length > MAX_PARTICLE_COUNT) {
+      // Safety margin: Leave space for extra particles (like the photo pendant)
+      const MAX_SAFE_COUNT = MAX_PARTICLE_COUNT - 100;
+
+      if (validPixels.length > MAX_SAFE_COUNT) {
           shuffleArray(validPixels);
-          activeCount = MAX_PARTICLE_COUNT;
+          activeCount = MAX_SAFE_COUNT;
       } else {
           activeCount = validPixels.length;
       }
